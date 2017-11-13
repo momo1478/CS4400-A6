@@ -29,18 +29,58 @@
 /* rounds up to the nearest multiple of mem_pagesize() */
 #define PAGE_ALIGN(size) (((size) + (mem_pagesize()-1)) & ~(mem_pagesize()-1))
 
+#define OVERHEAD (sizeof(block_header)+sizeof(block_footer))
+
+/* Block Header interface functions */
+#define HDRP(bp) ((char *)(bp) - sizeof(block_header))
+#define FTRP(bp) ((char *)(bp)+GET_SIZE(HDRP(bp))-OVERHEAD)
+
+#define GET_SIZE(p) ((block_header *)(p))->size
+#define GET_ALLOC(p) ((block_header *)(p))->allocated
+
+/* Payload of next block head pointer */
+#define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp)))
+#define PREV_BLKP(bp) ((char *)(bp)-GET_SIZE((char *)(bp)-OVERHEAD))
+
 void *current_avail = NULL;
 int current_avail_size = 0;
+
+typedef struct
+{
+  size_t size;
+  char allocated;
+} block_header;
+
+typedef struct
+{
+  size_t size;
+  int filler;
+} block_footer;
+
+void extend(size_t new_size)
+{
+  size_t chunk_size = PAGE_ALIGN(new_size);
+  void *bp = mem_map(chunk_size);
+  GET_SIZE(HDRP(bp)) = chunk_size;
+  GET_ALLOC(HDRP(bp)) = 0;
+  GET_SIZE(HDRP(NEXT_BLKP(bp))) = 0;
+  GET_ALLOC(HDRP(NEXT_BLKP(bp))) = 1;
+}
 
 /* 
  * mm_init - initialize the malloc package.
  */
 int mm_init(void)
 {
-  current_avail = NULL;
-  current_avail_size = 0;
-  
-  return 0;
+  current_avail_size = PAGE_ALIGN(mem_pagesize());
+  current_avail = mem_map(current_avail_size);
+
+  mm_malloc(0);
+
+  if(current_avail)
+    return 0;
+  else
+    return -1;
 }
 
 /* 
@@ -52,7 +92,8 @@ void *mm_malloc(size_t size)
   int newsize = ALIGN(size);
   void *p;
   
-  if (current_avail_size < newsize) {
+  if (current_avail_size < newsize) 
+  {
     current_avail_size = PAGE_ALIGN(newsize);
     current_avail = mem_map(current_avail_size);
     if (current_avail == NULL)
@@ -71,6 +112,7 @@ void *mm_malloc(size_t size)
  */
 void mm_free(void *ptr)
 {
+
 }
 
 /*
