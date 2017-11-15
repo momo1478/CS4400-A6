@@ -31,31 +31,38 @@
 
 #define OVERHEAD (sizeof(block_header)+sizeof(block_footer))
 
-/* Block Header interface functions */
+/* Get Header from payload pointer bp */ 
 #define HDRP(bp) ((char *)(bp) - sizeof(block_header))
-#define FTRP(bp) ((char *)(bp)+GET_SIZE(HDRP(bp))-OVERHEAD)
+#define FTRP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp))-OVERHEAD)
 
 #define GET_SIZE(p) ((block_header *)(p))->size
 #define GET_ALLOC(p) ((block_header *)(p))->allocated
 
 /* Payload of next block head pointer */
 #define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp)))
-#define PREV_BLKP(bp) ((char *)(bp)-GET_SIZE((char *)(bp)-OVERHEAD))
+#define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE((char *)(bp)- OVERHEAD))
+
+#define GET(p) (*(size_t *)(p))
+#define PUT(p, val) (*(size_t *)(p) = (val))
+#define PACK(size, alloc) ((size) | (alloc))
 
 void *current_avail = NULL;
 int current_avail_size = 0;
+void *start = NULL;
 
 typedef struct
 {
-  size_t size;
-  char allocated;
+  size_t size;    //In Bytes
+  char allocated; 
 } block_header;
-
+  
 typedef struct
 {
-  size_t size;
+  size_t size;    //In Bytes
   int filler;
 } block_footer;
+
+
 
 void extend(size_t new_size)
 {
@@ -68,14 +75,47 @@ void extend(size_t new_size)
 }
 
 /* 
+ * examine Memory - prints the state of the allocator.
+ */
+void examineMemory()
+{
+  void *bp = start + sizeof(block_header);
+  
+  //while we haven't hit the terminator.
+  while(GET_SIZE(HDRP(bp)) != 0)
+  {
+    printf("[%d,%d]=[%d]--> ", GET_SIZE(HDRP(bp))/sizeof(block_header), GET_ALLOC(HDRP(bp)), GET_SIZE(FTRP(bp))/sizeof(block_header));
+    bp = NEXT_BLKP(bp);
+  }
+  printf("[X]\n");
+}
+
+/* 
  * mm_init - initialize the malloc package.
  */
 int mm_init(void)
 {
+
   current_avail_size = PAGE_ALIGN(mem_pagesize());
   current_avail = mem_map(current_avail_size);
+  start = current_avail;
+  
+  void *first_bp = current_avail + sizeof(block_header);
 
-  mm_malloc(0);
+  //Setup Coalescing Prologue.
+  GET_SIZE(HDRP(first_bp)) = OVERHEAD;
+  GET_ALLOC(HDRP(first_bp)) = 1;
+  GET_SIZE(FTRP(first_bp)) = OVERHEAD;
+
+  //Setup (big) initial 0 alloc block
+  GET_SIZE(HDRP(NEXT_BLKP(first_bp))) = current_avail_size - OVERHEAD - sizeof(block_header);
+  GET_ALLOC(HDRP(NEXT_BLKP(first_bp))) = 0;
+  GET_SIZE(FTRP(NEXT_BLKP(first_bp))) = current_avail_size - OVERHEAD - sizeof(block_header);
+
+  GET_SIZE(HDRP(current_avail + current_avail_size)) = 0;
+
+  printf("\n");
+  examineMemory();
 
   if(current_avail)
     return 0;
@@ -130,5 +170,5 @@ int mm_check()
  */
 int mm_can_free(void *p)
 {
-  return 1;
+  return 0;//GET_ALLOC(HDRP(p)) == 1 && GET_SIZE(HDRP(p)) > 2;
 }
