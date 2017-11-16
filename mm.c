@@ -46,9 +46,18 @@
 #define PUT(p, val) (*(size_t *)(p) = (val))
 #define PACK(size, alloc) ((size) | (alloc))
 
+#define NEXT_PAGE(p) (*(page *)p->next)
+
 void *current_avail = NULL;
 int current_avail_size = 0;
-void *start = NULL;
+
+void *first_bp = NULL;
+void *page_list = NULL;
+
+typedef struct
+{
+  void *next;
+} page;
 
 typedef struct
 {
@@ -64,30 +73,21 @@ typedef struct
 
 
 
-void extend(size_t new_size)
-{
-  size_t chunk_size = PAGE_ALIGN(new_size);
-  void *bp = mem_map(chunk_size);
-  GET_SIZE(HDRP(bp)) = chunk_size;
-  GET_ALLOC(HDRP(bp)) = 0;
-  GET_SIZE(HDRP(NEXT_BLKP(bp))) = 0;
-  GET_ALLOC(HDRP(NEXT_BLKP(bp))) = 1;
-}
-
 /* 
  * examine Memory - prints the state of the allocator.
  */
 void examineMemory()
 {
-  void *bp = start + sizeof(block_header);
-  
-  //while we haven't hit the terminator.
-  while(GET_SIZE(HDRP(bp)) != 0)
-  {
-    printf("[%d,%d]=[%d]--> ", GET_SIZE(HDRP(bp))/sizeof(block_header), GET_ALLOC(HDRP(bp)), GET_SIZE(FTRP(bp))/sizeof(block_header));
-    bp = NEXT_BLKP(bp);
-  }
-  printf("[X]\n");
+  void *bp = first_bp;
+  void *pg = page_list;
+
+    //while we haven't hit the terminator in that page
+    while(GET_SIZE(HDRP(bp)) != 0)
+    {
+      printf("[%d,%d]=[%d]--> ", GET_SIZE(HDRP(bp))/sizeof(block_header), GET_ALLOC(HDRP(bp)), GET_SIZE(FTRP(bp))/sizeof(block_header));
+      bp = NEXT_BLKP(bp);
+    }
+    printf("[X]\n");
 }
 
 /* 
@@ -98,9 +98,11 @@ int mm_init(void)
 
   current_avail_size = PAGE_ALIGN(mem_pagesize());
   current_avail = mem_map(current_avail_size);
-  start = current_avail;
   
-  void *first_bp = current_avail + sizeof(block_header);
+  //page_list = current_avail;
+  //NEXT_PAGE(page_list) = NULL;
+  
+  first_bp = current_avail + sizeof(block_header);
 
   //Setup Coalescing Prologue.
   GET_SIZE(HDRP(first_bp)) = OVERHEAD;
@@ -114,13 +116,49 @@ int mm_init(void)
 
   GET_SIZE(HDRP(current_avail + current_avail_size)) = 0;
 
+  mm_malloc(48);
+  mm_malloc(90);
+  mm_malloc(16);
+  mm_malloc(16);
+  mm_malloc(100);
+
   printf("\n");
   examineMemory();
 
+  kill(getpid(), 2);
   if(current_avail)
     return 0;
   else
     return -1;
+}
+
+void set_allocated(void *bp, size_t size) 
+{
+ size_t extra_size = GET_SIZE(HDRP(bp)) - size;
+ 
+ if (extra_size > ALIGN(1 + OVERHEAD))
+  {
+    GET_SIZE(HDRP(bp)) = size;
+    GET_SIZE(FTRP(bp)) = size;
+
+    GET_SIZE(HDRP(NEXT_BLKP(bp))) = extra_size;
+    GET_SIZE(FTRP(NEXT_BLKP(bp))) = extra_size;
+
+    GET_ALLOC(HDRP(NEXT_BLKP(bp))) = 0;
+  }
+ GET_ALLOC(HDRP(bp)) = 1;
+}
+
+void extend(size_t new_size)
+{
+  size_t chunk_size = PAGE_ALIGN(new_size);
+  void *bp = mem_map(chunk_size);
+
+  GET_SIZE(HDRP(bp)) = chunk_size;
+  GET_ALLOC(HDRP(bp)) = 0;
+  
+  GET_SIZE(HDRP(NEXT_BLKP(bp))) = 0;
+  GET_ALLOC(HDRP(NEXT_BLKP(bp))) = 1;
 }
 
 /* 
@@ -129,30 +167,29 @@ int mm_init(void)
  */
 void *mm_malloc(size_t size)
 {
-  int newsize = ALIGN(size);
-  void *p;
-  
-  if (current_avail_size < newsize) 
-  {
-    current_avail_size = PAGE_ALIGN(newsize);
-    current_avail = mem_map(current_avail_size);
-    if (current_avail == NULL)
-      return NULL;
-  }
-
-  p = current_avail;
-  current_avail += newsize;
-  current_avail_size -= newsize;
-  
-  return p;
+ int new_size = ALIGN(size + OVERHEAD);
+ void *bp = first_bp;
+ while (GET_SIZE(HDRP(bp)) != 0) 
+ {
+   if (!GET_ALLOC(HDRP(bp)) && (GET_SIZE(HDRP(bp)) >= new_size) ) 
+   {
+     set_allocated(bp, new_size);
+     return bp;
+   }
+   bp = NEXT_BLKP(bp);
+ }
+ //extend(new_size);
+ set_allocated(bp, new_size);
+ return bp;
 }
+
 
 /*
  * mm_free - Freeing a block does nothing.
  */
 void mm_free(void *ptr)
 {
-
+  //GET_ALLOC(HDRP(bp)) = 0;
 }
 
 /*
