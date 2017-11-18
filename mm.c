@@ -46,17 +46,21 @@
 #define PUT(p, val) (*(size_t *)(p) = (val))
 #define PACK(size, alloc) ((size) | (alloc))
 
-#define NEXT_PAGE(p) (*(page *)p->next)
+#define NEXT_PAGE(p) (((page *)p)->next)
+#define PAGE_SIZE(p) (((page *)p)->size)
+
+extern void kill(int,int);
 
 void *current_avail = NULL;
 int current_avail_size = 0;
 
 void *first_bp = NULL;
-void *page_list = NULL;
+void *first_page = NULL;
 
 typedef struct
 {
   void *next;
+  size_t size;
 } page;
 
 typedef struct
@@ -71,23 +75,28 @@ typedef struct
   int filler;
 } block_footer;
 
-
-
 /* 
  * examine Memory - prints the state of the allocator.
  */
 void examineMemory()
 {
   void *bp = first_bp;
-  void *pg = page_list;
+  void *pg = first_page;
 
-    //while we haven't hit the terminator in that page
-    while(GET_SIZE(HDRP(bp)) != 0)
+    int pageCount = 0;
+    while(pg != NULL)
     {
-      printf("[%d,%d]=[%d]--> ", GET_SIZE(HDRP(bp))/sizeof(block_header), GET_ALLOC(HDRP(bp)), GET_SIZE(FTRP(bp))/sizeof(block_header));
-      bp = NEXT_BLKP(bp);
+      printf("[pg : %d|size : %d]\n", pageCount, PAGE_SIZE(pg));
+        //while we haven't hit the terminator in that page
+        while(GET_SIZE(HDRP(bp)) != 0)
+        {
+          printf("[%ld,%d]=[%ld]--> ", GET_SIZE(HDRP(bp))/sizeof(block_header), GET_ALLOC(HDRP(bp)), GET_SIZE(FTRP(bp))/sizeof(block_header));
+          bp = NEXT_BLKP(bp);
+        }
+        printf("[X]\n");
+      pg = NEXT_PAGE(pg);
+      bp = pg + sizeof(page) + sizeof(block_header);
     }
-    printf("[X]\n");
 }
 
 /* 
@@ -99,10 +108,12 @@ int mm_init(void)
   current_avail_size = PAGE_ALIGN(mem_pagesize());
   current_avail = mem_map(current_avail_size);
   
-  //page_list = current_avail;
-  //NEXT_PAGE(page_list) = NULL;
+  first_page = current_avail;
+
+  PAGE_SIZE(first_page) = current_avail_size;
+  NEXT_PAGE(first_page) = NULL;
   
-  first_bp = current_avail + sizeof(block_header);
+  first_bp = current_avail + sizeof(page) + sizeof(block_header);
 
   //Setup Coalescing Prologue.
   GET_SIZE(HDRP(first_bp)) = OVERHEAD;
@@ -122,6 +133,7 @@ int mm_init(void)
   mm_malloc(16);
   mm_malloc(100);
 
+  printf("\n");
   printf("\n");
   examineMemory();
 
@@ -153,10 +165,20 @@ void extend(size_t new_size)
 {
   size_t chunk_size = PAGE_ALIGN(new_size);
   void *bp = mem_map(chunk_size);
+  
+  void *pg = first_page;
+  while(pg != NULL)
+  {
+    pg = NEXT_PAGE(pg);
+  }
+
+  pg = bp;
+  PAGE_SIZE(pg) = chunk_size;
+  NEXT_PAGE(pg) = NULL;
 
   GET_SIZE(HDRP(bp)) = chunk_size;
   GET_ALLOC(HDRP(bp)) = 0;
-  
+
   GET_SIZE(HDRP(NEXT_BLKP(bp))) = 0;
   GET_ALLOC(HDRP(NEXT_BLKP(bp))) = 1;
 }
