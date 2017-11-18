@@ -86,7 +86,8 @@ void examineMemory()
     int pageCount = 0;
     while(pg != NULL)
     {
-      printf("[pg : %d|size : %d]\n", pageCount, PAGE_SIZE(pg));
+      bp = pg + sizeof(page) + sizeof(block_header);
+      printf("[pg : %d|size : %ld]\n", pageCount, PAGE_SIZE(pg));
         //while we haven't hit the terminator in that page
         while(GET_SIZE(HDRP(bp)) != 0)
         {
@@ -94,8 +95,8 @@ void examineMemory()
           bp = NEXT_BLKP(bp);
         }
         printf("[X]\n");
+
       pg = NEXT_PAGE(pg);
-      bp = pg + sizeof(page) + sizeof(block_header);
     }
 }
 
@@ -108,11 +109,12 @@ int mm_init(void)
   current_avail_size = PAGE_ALIGN(mem_pagesize());
   current_avail = mem_map(current_avail_size);
   
+  //Setup first page
   first_page = current_avail;
-
   PAGE_SIZE(first_page) = current_avail_size;
   NEXT_PAGE(first_page) = NULL;
   
+  //first payload pointer
   first_bp = current_avail + sizeof(page) + sizeof(block_header);
 
   //Setup Coalescing Prologue.
@@ -121,10 +123,11 @@ int mm_init(void)
   GET_SIZE(FTRP(first_bp)) = OVERHEAD;
 
   //Setup (big) initial 0 alloc block
-  GET_SIZE(HDRP(NEXT_BLKP(first_bp))) = current_avail_size - OVERHEAD - sizeof(block_header);
+  GET_SIZE(HDRP(NEXT_BLKP(first_bp))) = current_avail_size - OVERHEAD - sizeof(block_header) - sizeof(page);
   GET_ALLOC(HDRP(NEXT_BLKP(first_bp))) = 0;
-  GET_SIZE(FTRP(NEXT_BLKP(first_bp))) = current_avail_size - OVERHEAD - sizeof(block_header);
+  GET_SIZE(FTRP(NEXT_BLKP(first_bp))) = current_avail_size - OVERHEAD - sizeof(block_header) - sizeof(page);
 
+  //Setup Terminator Block
   GET_SIZE(HDRP(current_avail + current_avail_size)) = 0;
 
   mm_malloc(48);
@@ -132,12 +135,14 @@ int mm_init(void)
   mm_malloc(16);
   mm_malloc(16);
   mm_malloc(100);
+  //mm_malloc(2048);
+  //mm_malloc(2048);
 
   printf("\n");
   printf("\n");
   examineMemory();
 
-  kill(getpid(), 2);
+  //kill(getpid(), 2);
   if(current_avail)
     return 0;
   else
@@ -190,17 +195,25 @@ void extend(size_t new_size)
 void *mm_malloc(size_t size)
 {
  int new_size = ALIGN(size + OVERHEAD);
+ 
+ void *pg = first_page;
  void *bp = first_bp;
- while (GET_SIZE(HDRP(bp)) != 0) 
+
+ while(pg != NULL)
  {
-   if (!GET_ALLOC(HDRP(bp)) && (GET_SIZE(HDRP(bp)) >= new_size) ) 
+   bp = pg + sizeof(page) + sizeof(block_header);
+   while (GET_SIZE(HDRP(bp)) != 0) 
    {
-     set_allocated(bp, new_size);
-     return bp;
+     if (!GET_ALLOC(HDRP(bp)) && (GET_SIZE(HDRP(bp)) >= new_size) ) 
+     {
+       set_allocated(bp, new_size);
+       return bp;
+     }
+     bp = NEXT_BLKP(bp);
    }
-   bp = NEXT_BLKP(bp);
+   pg = NEXT_PAGE(pg);
  }
- //extend(new_size);
+ extend(new_size);
  set_allocated(bp, new_size);
  return bp;
 }
