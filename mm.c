@@ -30,6 +30,7 @@
 #define PAGE_ALIGN(size) (((size) + (mem_pagesize()-1)) & ~(mem_pagesize()-1))
 
 #define OVERHEAD (sizeof(block_header)+sizeof(block_footer))
+#define NEW_UBLOCK_SIZE(pgsize) (pgsize - OVERHEAD - sizeof(block_header) - sizeof(page))
 
 /* Get Header from payload pointer bp */ 
 #define HDRP(bp) ((char *)(bp) - sizeof(block_header))
@@ -106,9 +107,9 @@ int mm_init(void)
 
   pp = NEXT_BLKP(pp);
   //setup unallocated block for new chunk.
-  GET_SIZE(HDRP(pp)) = PAGE_SIZE(first_page) - OVERHEAD - sizeof(block_header) - sizeof(page);
+  GET_SIZE(HDRP(pp)) = NEW_UBLOCK_SIZE(PAGE_SIZE(first_page));
   GET_ALLOC(HDRP(pp)) = 0;
-  GET_SIZE(FTRP(pp)) = PAGE_SIZE(first_page) - OVERHEAD - sizeof(block_header) - sizeof(page);
+  GET_SIZE(FTRP(pp)) = NEW_UBLOCK_SIZE(PAGE_SIZE(first_page));
 
   pp = NEXT_BLKP(pp);
   //setup terminator block for new chunk
@@ -127,17 +128,35 @@ int mm_init(void)
   return 0;
 }
 
-void extend(size_t new_size) 
+void* extend(size_t new_size) 
 {
  size_t chunk_size = PAGE_ALIGN(new_size);
  void *new_page = mem_map(chunk_size);
 
+ PAGE_SIZE(new_page) = chunk_size;
+ NEXT_PAGE(new_page) = NULL;
+
  void *pp = new_page + sizeof(page) + sizeof(block_header);
 
- GET_SIZE(HDRP(bp)) = chunk_size;
- GET_ALLOC(HDRP(bp)) = 0;
- GET_SIZE(HDRP(NEXT_BLKP(bp))) = 0;
- GET_ALLOC(HDRP(NEXT_BLKP(bp))) = 1;
+ //create prologue for new page
+ GET_SIZE(HDRP(pp)) = 2;
+ GET_ALLOC(HDRP(pp)) = 1;
+ GET_SIZE(FTRP(pp)) = 2;
+
+ pp = NEXT_BLKP(pp);
+
+ //create unalocated block
+ GET_SIZE(HDRP(pp)) = NEW_UBLOCK_SIZE(PAGE_SIZE(new_page));
+ GET_SIZE(FTRP(pp)) = NEW_UBLOCK_SIZE(PAGE_SIZE(new_page));
+ GET_ALLOC(HDRP(pp)) = 0;
+
+ pp = NEXT_BLKP(pp);
+
+ //create terminator block
+ GET_SIZE(HDRP(pp)) = 0;
+ GET_ALLOC(HDRP(pp)) = 1;
+
+ return (new_page + sizeof(page) + OVERHEAD + sizeof(block_header));
 }
 
 void set_allocated(void *bp, size_t size) 
@@ -173,7 +192,7 @@ void *mm_malloc(size_t size)
    }
    bp = NEXT_BLKP(bp);
  }
- extend(new_size);
+ bp = extend(new_size);
  set_allocated(bp, new_size);
  return bp;
 }
