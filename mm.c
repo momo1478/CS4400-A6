@@ -42,20 +42,8 @@
 #define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp)))
 #define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE((char *)(bp)- OVERHEAD))
 
-#define GET(p) (*(size_t *)(p))
-#define PUT(p, val) (*(size_t *)(p) = (val))
-#define PACK(size, alloc) ((size) | (alloc))
-
 #define NEXT_PAGE(p) (((page *)p)->next)
 #define PAGE_SIZE(p) (((page *)p)->size)
-
-extern void kill(int,int);
-
-void *current_avail = NULL;
-int current_avail_size = 0;
-
-void *first_bp = NULL;
-void *first_page = NULL;
 
 typedef struct
 {
@@ -75,156 +63,124 @@ typedef struct
   int filler;
 } block_footer;
 
-/* 
- * examine Memory - prints the state of the allocator.
- */
+void *current_avail = NULL; //REMOVE
+int current_avail_size = 0; //REMOVE
+
+void* first_page; //First chunk pointer
+void* first_pp;   //First payload pointer.
+
+
 void examineMemory()
 {
-  void *bp = first_bp;
-  void *pg = first_page;
-
-    int pageCount = 0;
-    while(pg != NULL)
-    {
-      bp = pg + sizeof(page) + sizeof(block_header);
-      printf("[pg : %d|size : %ld]\n", pageCount, PAGE_SIZE(pg));
-        //while we haven't hit the terminator in that page
-        while(GET_SIZE(HDRP(bp)) != 0)
-        {
-          printf("[%ld,%d]=[%ld]--> ", GET_SIZE(HDRP(bp))/sizeof(block_header), GET_ALLOC(HDRP(bp)), GET_SIZE(FTRP(bp))/sizeof(block_header));
-          bp = NEXT_BLKP(bp);
-        }
-        printf("[X]\n");
-
-      pg = NEXT_PAGE(pg);
-    }
+  void *pp = first_pp;
+  
+  //while we haven't hit the terminator in that page
+  while(GET_SIZE(HDRP(pp)) != 0)
+  {
+    printf("[%ld,%d]=[%ld]--> ", GET_SIZE(HDRP(pp))/sizeof(block_header), GET_ALLOC(HDRP(pp)), GET_SIZE(FTRP(pp))/sizeof(block_header));
+    pp = NEXT_BLKP(pp);
+  }
+  printf("[X]\n");
 }
-
 /* 
  * mm_init - initialize the malloc package.
  */
 int mm_init(void)
 {
-
   current_avail_size = PAGE_ALIGN(mem_pagesize());
   current_avail = mem_map(current_avail_size);
-  
-  //Setup first page
+
+  //First Page Setup
   first_page = current_avail;
-  PAGE_SIZE(first_page) = current_avail_size;
   NEXT_PAGE(first_page) = NULL;
-  
-  //first payload pointer
-  first_bp = current_avail + sizeof(page) + sizeof(block_header);
+  PAGE_SIZE(first_page) = current_avail_size;
 
+  //First payload pointer
+  first_pp = current_avail + sizeof(page) + sizeof(block_header);
+
+  void* pp = first_pp;
   //Setup Coalescing Prologue.
-  GET_SIZE(HDRP(first_bp)) = OVERHEAD;
-  GET_ALLOC(HDRP(first_bp)) = 1;
-  GET_SIZE(FTRP(first_bp)) = OVERHEAD;
+  GET_SIZE(HDRP(pp)) = OVERHEAD;
+  GET_ALLOC(HDRP(pp)) = 1;
+  GET_SIZE(FTRP(pp)) = OVERHEAD;
 
-  //Setup (big) initial 0 alloc block
-  GET_SIZE(HDRP(NEXT_BLKP(first_bp))) = current_avail_size - OVERHEAD - sizeof(block_header) - sizeof(page);
-  GET_ALLOC(HDRP(NEXT_BLKP(first_bp))) = 0;
-  GET_SIZE(FTRP(NEXT_BLKP(first_bp))) = current_avail_size - OVERHEAD - sizeof(block_header) - sizeof(page);
+  pp = NEXT_BLKP(pp);
+  //setup unallocated block for new chunk.
+  GET_SIZE(HDRP(pp)) = PAGE_SIZE(first_page) - OVERHEAD - sizeof(block_header) - sizeof(page);
+  GET_ALLOC(HDRP(pp)) = 0;
+  GET_SIZE(FTRP(pp)) = PAGE_SIZE(first_page) - OVERHEAD - sizeof(block_header) - sizeof(page);
 
-  //Setup Terminator Block
-  GET_SIZE(HDRP(current_avail + current_avail_size)) = 0;
+  pp = NEXT_BLKP(pp);
+  //setup terminator block for new chunk
+  GET_SIZE(HDRP(pp)) = 0;
+  GET_ALLOC(HDRP(pp)) = 1;
 
   mm_malloc(48);
-  mm_malloc(90);
-  mm_malloc(16);
-  mm_malloc(16);
-  mm_malloc(100);
-  //mm_malloc(2048);
-  //mm_malloc(2048);
+  mm_malloc(96);
+  mm_malloc(256);
+  mm_malloc(1024);
 
   printf("\n");
   printf("\n");
   examineMemory();
+  printf("\n");
+  return 0;
+}
 
-  //kill(getpid(), 2);
-  if(current_avail)
-    return 0;
-  else
-    return -1;
+void extend(size_t new_size) 
+{
+ size_t chunk_size = PAGE_ALIGN(new_size);
+ void *bp = mem_map(chunk_size);
+
+ GET_SIZE(HDRP(bp)) = chunk_size;
+ GET_ALLOC(HDRP(bp)) = 0;
+ GET_SIZE(HDRP(NEXT_BLKP(bp))) = 0;
+ GET_ALLOC(HDRP(NEXT_BLKP(bp))) = 1;
 }
 
 void set_allocated(void *bp, size_t size) 
 {
  size_t extra_size = GET_SIZE(HDRP(bp)) - size;
- 
- if (extra_size > ALIGN(1 + OVERHEAD))
-  {
-    GET_SIZE(HDRP(bp)) = size;
-    GET_SIZE(FTRP(bp)) = size;
+ if (extra_size > ALIGN(1 + OVERHEAD)) 
+ {
+   GET_SIZE(HDRP(bp)) = size;
+   GET_SIZE(FTRP(bp)) = size;
 
-    GET_SIZE(HDRP(NEXT_BLKP(bp))) = extra_size;
-    GET_SIZE(FTRP(NEXT_BLKP(bp))) = extra_size;
-
-    GET_ALLOC(HDRP(NEXT_BLKP(bp))) = 0;
-  }
+   GET_SIZE(HDRP(NEXT_BLKP(bp))) = extra_size;
+   GET_SIZE(FTRP(NEXT_BLKP(bp))) = extra_size;
+   GET_ALLOC(HDRP(NEXT_BLKP(bp))) = 0;
+ }
  GET_ALLOC(HDRP(bp)) = 1;
-}
-
-void extend(size_t new_size)
-{
-  size_t chunk_size = PAGE_ALIGN(new_size);
-  void *bp = mem_map(chunk_size);
-  
-  void *pg = first_page;
-  while(pg != NULL)
-  {
-    pg = NEXT_PAGE(pg);
-  }
-
-  pg = bp;
-  PAGE_SIZE(pg) = chunk_size;
-  NEXT_PAGE(pg) = NULL;
-
-  GET_SIZE(HDRP(bp)) = chunk_size;
-  GET_ALLOC(HDRP(bp)) = 0;
-
-  GET_SIZE(HDRP(NEXT_BLKP(bp))) = 0;
-  GET_ALLOC(HDRP(NEXT_BLKP(bp))) = 1;
 }
 
 /* 
  * mm_malloc - Allocate a block by using bytes from current_avail,
  *     grabbing a new page if necessary.
  */
-void *mm_malloc(size_t size)
+void *mm_malloc(size_t size) 
 {
  int new_size = ALIGN(size + OVERHEAD);
- 
- void *pg = first_page;
- void *bp = first_bp;
-
- while(pg != NULL)
+ void *bp = first_pp;
+ while (GET_SIZE(HDRP(bp)) != 0)
  {
-   bp = pg + sizeof(page) + sizeof(block_header);
-   while (GET_SIZE(HDRP(bp)) != 0) 
+   if (!GET_ALLOC(HDRP(bp)) && (GET_SIZE(HDRP(bp)) >= new_size))
    {
-     if (!GET_ALLOC(HDRP(bp)) && (GET_SIZE(HDRP(bp)) >= new_size) ) 
-     {
-       set_allocated(bp, new_size);
-       return bp;
-     }
-     bp = NEXT_BLKP(bp);
+     set_allocated(bp, new_size);
+     return bp;
    }
-   pg = NEXT_PAGE(pg);
+   bp = NEXT_BLKP(bp);
  }
  extend(new_size);
  set_allocated(bp, new_size);
  return bp;
 }
 
-
 /*
  * mm_free - Freeing a block does nothing.
  */
 void mm_free(void *ptr)
 {
-  //GET_ALLOC(HDRP(bp)) = 0;
+
 }
 
 /*
@@ -242,5 +198,5 @@ int mm_check()
  */
 int mm_can_free(void *p)
 {
-  return 0;//GET_ALLOC(HDRP(p)) == 1 && GET_SIZE(HDRP(p)) > 2;
+  return 1;
 }
