@@ -130,7 +130,9 @@ int mm_init(void)
 void extend(size_t new_size) 
 {
  size_t chunk_size = PAGE_ALIGN(new_size);
- void *bp = mem_map(chunk_size);
+ void *new_page = mem_map(chunk_size);
+
+ void *pp = new_page + sizeof(page) + sizeof(block_header);
 
  GET_SIZE(HDRP(bp)) = chunk_size;
  GET_ALLOC(HDRP(bp)) = 0;
@@ -148,6 +150,7 @@ void set_allocated(void *bp, size_t size)
 
    GET_SIZE(HDRP(NEXT_BLKP(bp))) = extra_size;
    GET_SIZE(FTRP(NEXT_BLKP(bp))) = extra_size;
+
    GET_ALLOC(HDRP(NEXT_BLKP(bp))) = 0;
  }
  GET_ALLOC(HDRP(bp)) = 1;
