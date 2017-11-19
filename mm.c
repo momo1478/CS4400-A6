@@ -74,13 +74,14 @@ void* first_pp;   //First payload pointer.
 void examineMemory()
 {
   void *pp = first_pp;
-  
-  //while we haven't hit the terminator in that page
-  while(GET_SIZE(HDRP(pp)) != 0)
-  {
-    printf("[%ld,%d]=[%ld]--> ", GET_SIZE(HDRP(pp))/sizeof(block_header), GET_ALLOC(HDRP(pp)), GET_SIZE(FTRP(pp))/sizeof(block_header));
-    pp = NEXT_BLKP(pp);
-  }
+
+    //while we haven't hit the terminator in that page
+    while(GET_SIZE(HDRP(pp)) != 0)
+    {
+      printf("[%ld,%d]=[%ld]--> ", GET_SIZE(HDRP(pp))/sizeof(block_header), GET_ALLOC(HDRP(pp)), GET_SIZE(FTRP(pp))/sizeof(block_header));
+      pp = NEXT_BLKP(pp);
+    }
+
   printf("[X]\n");
 }
 /* 
@@ -116,15 +117,15 @@ int mm_init(void)
   GET_SIZE(HDRP(pp)) = 0;
   GET_ALLOC(HDRP(pp)) = 1;
 
-  mm_malloc(48);
-  mm_malloc(96);
-  mm_malloc(256);
-  mm_malloc(1024);
+  //mm_malloc(48);
+  //mm_malloc(96);
+  //mm_malloc(256);
+  //mm_malloc(1024);
 
-  printf("\n");
-  printf("\n");
-  examineMemory();
-  printf("\n");
+  //printf("\n");
+  //printf("\n");
+  //examineMemory();
+  //printf("\n");
   return 0;
 }
 
@@ -133,8 +134,25 @@ void* extend(size_t new_size)
  size_t chunk_size = PAGE_ALIGN(new_size);
  void *new_page = mem_map(chunk_size);
 
- PAGE_SIZE(new_page) = chunk_size;
- NEXT_PAGE(new_page) = NULL;
+ page *pg = first_page;
+ while(NEXT_PAGE(pg) != NULL)
+ {
+  pg = NEXT_PAGE(pg);
+ }
+
+ page* p_list_end = pg->next;
+ p_list_end = new_page;
+ p_list_end->next = NULL;
+ p_list_end->size = chunk_size;
+
+ // pg = first_page;
+ // int pageCount = 0;
+ //    while(pg != NULL)
+ //    {
+ //      printf("page[%d] @ %p\n",pageCount, pg);
+ //      pageCount++;
+ //      pg = NEXT_PAGE(pg);
+ //    }
 
  void *pp = new_page + sizeof(page) + sizeof(block_header);
 
@@ -182,19 +200,26 @@ void set_allocated(void *bp, size_t size)
 void *mm_malloc(size_t size) 
 {
  int new_size = ALIGN(size + OVERHEAD);
- void *bp = first_pp;
- while (GET_SIZE(HDRP(bp)) != 0)
+ void *pp = first_pp;
+ void *pg = first_page ;
+
+ while(pg != NULL)
  {
-   if (!GET_ALLOC(HDRP(bp)) && (GET_SIZE(HDRP(bp)) >= new_size))
+   pp = pg + sizeof(page) + OVERHEAD + sizeof(block_header);
+   while (GET_SIZE(HDRP(pp)) != 0)
    {
-     set_allocated(bp, new_size);
-     return bp;
+     if (!GET_ALLOC(HDRP(pp)) && (GET_SIZE(HDRP(pp)) >= new_size))
+     {
+       set_allocated(pp, new_size);
+       return pp;
+     }
+     pp = NEXT_BLKP(pp);
    }
-   bp = NEXT_BLKP(bp);
+   pg = NEXT_PAGE(pg);
  }
- bp = extend(new_size);
- set_allocated(bp, new_size);
- return bp;
+ pp = extend(new_size);
+ set_allocated(pp, new_size);
+ return pp;
 }
 
 /*
