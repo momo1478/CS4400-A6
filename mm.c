@@ -30,7 +30,11 @@
 #define PAGE_ALIGN(size) (((size) + (mem_pagesize()-1)) & ~(mem_pagesize()-1))
 
 #define OVERHEAD (sizeof(block_header)+sizeof(block_footer))
-#define NEW_UBLOCK_SIZE(pgsize) (pgsize - OVERHEAD - sizeof(block_header) - sizeof(page))
+#define BHSIZE (sizeof(block_header))
+#define PGSIZE (sizeof(page))
+
+#define NEXT_PAGE(pg) (((page *)pg)->next)
+#define PREV_PAGE(pg) (((page *)pg)->prev)
 
 /* Get Header from payload pointer bp */ 
 #define HDRP(bp) ((char *)(bp) - sizeof(block_header))
@@ -43,13 +47,10 @@
 #define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp)))
 #define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE((char *)(bp)- OVERHEAD))
 
-#define NEXT_PAGE(p) (((page *)p)->next)
-#define PAGE_SIZE(p) (((page *)p)->size)
-
 typedef struct
 {
   void *next;
-  size_t size;
+  void *prev;
 } page;
 
 typedef struct
@@ -64,41 +65,49 @@ typedef struct
   int filler;
 } block_footer;
 
-void *current_avail = NULL; //REMOVE
-int current_avail_size = 0; //REMOVE
-
-void* first_page; //First chunk pointer
+page* first_page; //First chunk pointer
 void* first_pp;   //First payload pointer.
+page* last_page_inserted;
 
 
 void examineMemory()
 {
-  void *pp = first_pp;
+  void* pp = first_pp;
+  void* pg = first_page;
 
-    //while we haven't hit the terminator in that page
-    while(GET_SIZE(HDRP(pp)) != 0)
+  int pageCount = 0;
+
+  while(pg != NULL)
     {
-      printf("[%ld,%d]=[%ld]--> ", GET_SIZE(HDRP(pp))/sizeof(block_header), GET_ALLOC(HDRP(pp)), GET_SIZE(FTRP(pp))/sizeof(block_header));
-      pp = NEXT_BLKP(pp);
-    }
+      pp = (void *)pg + PGSIZE + BHSIZE;
+      printf("[pg : %d]\n", pageCount);
+      
+      while(GET_SIZE(HDRP(pp)) != 0)
+        {
+          printf("[%ld,%d]=[%ld]--> ", GET_SIZE(HDRP(pp))/sizeof(block_header), GET_ALLOC(HDRP(pp)), GET_SIZE(FTRP(pp))/sizeof(block_header));
+          pp = NEXT_BLKP(pp);
+        }
+      printf("[X]\n");
 
-  printf("[X]\n");
+      pg = NEXT_PAGE(pg);
+      pageCount++;
+    }
 }
 /* 
  * mm_init - initialize the malloc package.
  */
 int mm_init(void)
 {
-  current_avail_size = PAGE_ALIGN(mem_pagesize());
-  current_avail = mem_map(current_avail_size);
-
+  size_t firstPageSize = PAGE_ALIGN(mem_pagesize());
+  first_page = mem_map(firstPageSize);
+  last_page_inserted = first_page;
+  
   //First Page Setup
-  first_page = current_avail;
   NEXT_PAGE(first_page) = NULL;
-  PAGE_SIZE(first_page) = current_avail_size;
+  PREV_PAGE(first_page) = NULL;
 
   //First payload pointer
-  first_pp = current_avail + sizeof(page) + sizeof(block_header);
+  first_pp = (char *)first_page + PGSIZE + BHSIZE;
 
   void* pp = first_pp;
   //Setup Coalescing Prologue.
@@ -108,73 +117,60 @@ int mm_init(void)
 
   pp = NEXT_BLKP(pp);
   //setup unallocated block for new chunk.
-  GET_SIZE(HDRP(pp)) = NEW_UBLOCK_SIZE(PAGE_SIZE(first_page));
+  GET_SIZE(HDRP(pp)) = firstPageSize - PGSIZE -  OVERHEAD - BHSIZE;
   GET_ALLOC(HDRP(pp)) = 0;
-  GET_SIZE(FTRP(pp)) = NEW_UBLOCK_SIZE(PAGE_SIZE(first_page));
+  GET_SIZE(FTRP(pp)) = firstPageSize - PGSIZE -  OVERHEAD - BHSIZE;
 
   pp = NEXT_BLKP(pp);
   //setup terminator block for new chunk
   GET_SIZE(HDRP(pp)) = 0;
   GET_ALLOC(HDRP(pp)) = 1;
 
-  //mm_malloc(48);
-  //mm_malloc(96);
-  //mm_malloc(256);
-  //mm_malloc(1024);
 
-  //printf("\n");
-  //printf("\n");
-  //examineMemory();
-  //printf("\n");
+  // printf("\n");
+  // printf("\n");
+  // examineMemory();
+  // printf("\n");
   return 0;
 }
 
 void* extend(size_t new_size) 
 {
- size_t chunk_size = PAGE_ALIGN(new_size);
+  int clampedSize = new_size > (8 * mem_pagesize()) ? new_size : 8 * mem_pagesize();
+ size_t chunk_size = PAGE_ALIGN(clampedSize * 4);
  void *new_page = mem_map(chunk_size);
 
- page *pg = first_page;
+ //Find pageList end.
+ void *pg = first_page;
  while(NEXT_PAGE(pg) != NULL)
  {
   pg = NEXT_PAGE(pg);
  }
 
- page* p_list_end = pg->next;
- p_list_end = new_page;
- p_list_end->next = NULL;
- p_list_end->size = chunk_size;
+ //Hookup new page into pageList.
+ NEXT_PAGE(pg) = new_page;
+ NEXT_PAGE(NEXT_PAGE(pg)) = NULL;
+ PREV_PAGE(NEXT_PAGE(pg)) = pg;
 
- // pg = first_page;
- // int pageCount = 0;
- //    while(pg != NULL)
- //    {
- //      printf("page[%d] @ %p\n",pageCount, pg);
- //      pageCount++;
- //      pg = NEXT_PAGE(pg);
- //    }
-
- void *pp = new_page + sizeof(page) + sizeof(block_header);
+ void *pp = new_page + PGSIZE + BHSIZE;
 
  //create prologue for new page
- GET_SIZE(HDRP(pp)) = 2;
+ GET_SIZE(HDRP(pp)) = OVERHEAD;
  GET_ALLOC(HDRP(pp)) = 1;
- GET_SIZE(FTRP(pp)) = 2;
+ GET_SIZE(FTRP(pp)) = OVERHEAD;
 
- pp = NEXT_BLKP(pp);
-
+ pp = NEXT_BLKP(pp); 
  //create unalocated block
- GET_SIZE(HDRP(pp)) = NEW_UBLOCK_SIZE(PAGE_SIZE(new_page));
- GET_SIZE(FTRP(pp)) = NEW_UBLOCK_SIZE(PAGE_SIZE(new_page));
+ GET_SIZE(HDRP(pp)) = chunk_size - PGSIZE - OVERHEAD - BHSIZE;
+ GET_SIZE(FTRP(pp)) = chunk_size - PGSIZE - OVERHEAD - BHSIZE;
  GET_ALLOC(HDRP(pp)) = 0;
 
  pp = NEXT_BLKP(pp);
-
  //create terminator block
  GET_SIZE(HDRP(pp)) = 0;
  GET_ALLOC(HDRP(pp)) = 1;
 
- return (new_page + sizeof(page) + OVERHEAD + sizeof(block_header));
+ return (new_page + PGSIZE + OVERHEAD + BHSIZE);
 }
 
 void set_allocated(void *bp, size_t size) 
@@ -199,24 +195,27 @@ void set_allocated(void *bp, size_t size)
  */
 void *mm_malloc(size_t size) 
 {
+  if(size == 0)
+    return NULL;
+  
  int new_size = ALIGN(size + OVERHEAD);
- void *pp = first_pp;
- void *pg = first_page ;
-
+ void *pg = first_page;
+ void *pp;
  while(pg != NULL)
- {
-   pp = pg + sizeof(page) + OVERHEAD + sizeof(block_header);
-   while (GET_SIZE(HDRP(pp)) != 0)
    {
-     if (!GET_ALLOC(HDRP(pp)) && (GET_SIZE(HDRP(pp)) >= new_size))
-     {
-       set_allocated(pp, new_size);
-       return pp;
-     }
-     pp = NEXT_BLKP(pp);
+     pp = pg + PGSIZE + OVERHEAD + BHSIZE;
+     while (GET_SIZE(HDRP(pp)) != 0)
+       {
+	 if (!GET_ALLOC(HDRP(pp)) && (GET_SIZE(HDRP(pp)) >= new_size))
+	   {
+	     set_allocated(pp, new_size);
+	     return pp;
+	   }
+	 pp = NEXT_BLKP(pp);
+       }
+     pg = NEXT_PAGE(pg);
    }
-   pg = NEXT_PAGE(pg);
- }
+ 
  pp = extend(new_size);
  set_allocated(pp, new_size);
  return pp;
@@ -227,7 +226,7 @@ void *mm_malloc(size_t size)
  */
 void mm_free(void *ptr)
 {
-
+  GET_ALLOC(HDRP(ptr)) = 0;
 }
 
 /*
