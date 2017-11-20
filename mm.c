@@ -29,9 +29,13 @@
 /* rounds up to the nearest multiple of mem_pagesize() */
 #define PAGE_ALIGN(size) (((size) + (mem_pagesize()-1)) & ~(mem_pagesize()-1))
 
+/* rounds down to the nearest multiple of mem_pagesize() */
+#define ADDRESS_PAGE_START(p) ((void *)(((size_t)p) & ~(mem_pagesize()-1)))
+
 #define OVERHEAD (sizeof(block_header)+sizeof(block_footer))
 #define BHSIZE (sizeof(block_header))
 #define PGSIZE (sizeof(page))
+#define MAX_BLOCK_SIZE 1 << 32
 
 #define NEXT_PAGE(pg) (((page *)pg)->next)
 #define PREV_PAGE(pg) (((page *)pg)->prev)
@@ -46,6 +50,8 @@
 /* Payload of next block head pointer */
 #define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp)))
 #define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE((char *)(bp)- OVERHEAD))
+
+
 
 typedef struct
 {
@@ -136,12 +142,12 @@ int mm_init(void)
 
 void* extend(size_t new_size) 
 {
-  int clampedSize = new_size > (8 * mem_pagesize()) ? new_size : 8 * mem_pagesize();
- size_t chunk_size = PAGE_ALIGN(clampedSize * 4);
+int clampedSize = new_size > (8 * mem_pagesize()) ? new_size : 8 * mem_pagesize();
+ size_t chunk_size = PAGE_ALIGN(clampedSize + 1); //PAGE_ALIGN(clampedSize * 4);
  void *new_page = mem_map(chunk_size);
 
  //Find pageList end.
- void *pg = first_page;
+ void *pg = last_page_inserted;
  while(NEXT_PAGE(pg) != NULL)
  {
   pg = NEXT_PAGE(pg);
@@ -151,6 +157,8 @@ void* extend(size_t new_size)
  NEXT_PAGE(pg) = new_page;
  NEXT_PAGE(NEXT_PAGE(pg)) = NULL;
  PREV_PAGE(NEXT_PAGE(pg)) = pg;
+
+ last_page_inserted = NEXT_PAGE(pg);
 
  void *pp = new_page + PGSIZE + BHSIZE;
 
@@ -176,6 +184,7 @@ void* extend(size_t new_size)
 void set_allocated(void *bp, size_t size) 
 {
  size_t extra_size = GET_SIZE(HDRP(bp)) - size;
+
  if (extra_size > ALIGN(1 + OVERHEAD)) 
  {
    GET_SIZE(HDRP(bp)) = size;
@@ -202,23 +211,57 @@ void *mm_malloc(size_t size)
  void *pg = first_page;
  void *pp;
  while(pg != NULL)
+ {
+   pp = pg + PGSIZE + OVERHEAD + BHSIZE;
+   while (GET_SIZE(HDRP(pp)) != 0)
    {
-     pp = pg + PGSIZE + OVERHEAD + BHSIZE;
-     while (GET_SIZE(HDRP(pp)) != 0)
-       {
-	 if (!GET_ALLOC(HDRP(pp)) && (GET_SIZE(HDRP(pp)) >= new_size))
-	   {
-	     set_allocated(pp, new_size);
-	     return pp;
-	   }
-	 pp = NEXT_BLKP(pp);
-       }
-     pg = NEXT_PAGE(pg);
-   }
+    if (!GET_ALLOC(HDRP(pp)) && (GET_SIZE(HDRP(pp)) >= new_size))
+    {
+      set_allocated(pp, new_size);
+      return pp;
+    }
+    pp = NEXT_BLKP(pp);
+  }
+  pg = NEXT_PAGE(pg);
+}
  
  pp = extend(new_size);
  set_allocated(pp, new_size);
  return pp;
+}
+
+void *coalesce(void *bp)
+{
+ size_t prev_alloc = GET_ALLOC(HDRP(PREV_BLKP(bp)));
+ size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
+ size_t size = GET_SIZE(HDRP(bp));
+
+ if (prev_alloc && next_alloc)
+   { /* Case 1 */
+     /* nothing to do */
+   }
+ else if (prev_alloc && !next_alloc)
+   { /* Case 2 */
+     size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
+     GET_SIZE(HDRP(bp)) = size;
+     GET_SIZE(FTRP(bp)) = size;
+   }
+ else if (!prev_alloc && next_alloc)
+   { /* Case 3 */
+     size += GET_SIZE(HDRP(PREV_BLKP(bp)));
+     GET_SIZE(FTRP(bp)) = size;
+     GET_SIZE(HDRP(PREV_BLKP(bp))) = size;
+     bp = PREV_BLKP(bp);
+   }
+ else
+   { /* Case 4 */
+     size += (GET_SIZE(HDRP(PREV_BLKP(bp))) + GET_SIZE(HDRP(NEXT_BLKP(bp))));
+     GET_SIZE(HDRP(PREV_BLKP(bp))) = size;
+     GET_SIZE(FTRP(NEXT_BLKP(bp))) = size;
+     bp = PREV_BLKP(bp);
+   }
+
+ return bp;
 }
 
 /*
@@ -227,6 +270,13 @@ void *mm_malloc(size_t size)
 void mm_free(void *ptr)
 {
   GET_ALLOC(HDRP(ptr)) = 0;
+  coalesce(ptr);
+}
+
+int ptr_is_mapped(void *p, size_t len) 
+{
+    void *s = ADDRESS_PAGE_START(p);
+    return mem_is_mapped(s, PAGE_ALIGN((p + len) - s));
 }
 
 /*
@@ -235,6 +285,35 @@ void mm_free(void *ptr)
  */
 int mm_check()
 {
+  void* pg = first_page;
+  void* pp;
+
+  while(pg != NULL)
+  {
+    //beginning of page doesn't have atleast 1 page on it.
+    if(!ptr_is_mapped(pg,mem_pagesize()))
+      return 0;
+
+    pp = (void *)pg + PGSIZE + BHSIZE;
+
+    while(GET_SIZE(HDRP(pp)) != 0)
+    {
+      // Size is invalid or leads to unmapped address.
+      if( !ptr_is_mapped(pp,GET_SIZE(HDRP(pp))) && GET_SIZE(HDRP(pp)) < (size_t)MAX_BLOCK_SIZE)
+        return 0;
+
+      //Allocation bit is not 0 or 1
+      if(GET_ALLOC(HDRP(pp)) != 0 || GET_ALLOC(HDRP(pp)) != 1)
+        return 0;
+
+      //Header size is not the same as footer size.
+      if( GET_SIZE(HDRP(pp)) != GET_SIZE(FTRP(pp)) )
+        return 0;
+
+      pp = NEXT_BLKP(pp);
+    }
+    pg = NEXT_PAGE(pg);
+  }
   return 1;
 }
 
@@ -244,5 +323,14 @@ int mm_check()
  */
 int mm_can_free(void *p)
 {
+  //ensure pointer is mapped
+  if( !ptr_is_mapped(p,GET_SIZE(HDRP(p))) )
+    return 0;
+
+  // ensure that block was allocated.
+  if( GET_ALLOC(HDRP(p)) != 1 )
+    return 0;
+
+
   return 1;
 }
