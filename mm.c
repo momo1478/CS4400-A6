@@ -77,6 +77,7 @@ typedef struct
 page* first_page; //First chunk pointer
 void* first_pp;   //First payload pointer.
 page* last_page_inserted;
+void* last_block_inserted;
 
 
 void examinePages()
@@ -128,6 +129,7 @@ int mm_init(void)
 
   //First payload pointer
   first_pp = (char *)first_page + PGSIZE + BHSIZE;
+  last_block_inserted = first_pp;
 
   void* pp = first_pp;
   //Setup Coalescing Prologue.
@@ -176,6 +178,8 @@ void* extend(size_t new_size)
  last_page_inserted = NEXT_PAGE(pg);
 
  void *pp = new_page + PGSIZE + BHSIZE;
+
+ last_block_inserted = pp;
 
  //create prologue for new page
  GET_SIZE(HDRP(pp)) = OVERHEAD;
@@ -227,33 +231,41 @@ void *mm_malloc(size_t size)
  void *pp;
 
  pg = last_page_inserted == NULL ? first_page : last_page_inserted;
- pp = pg + PGSIZE + OVERHEAD + BHSIZE;
- while (GET_SIZE(HDRP(pp)) != 0)
-  {
-    if (!GET_ALLOC(HDRP(pp)) && (GET_SIZE(HDRP(pp)) >= new_size))
+ pp = last_block_inserted == NULL ? first_page : last_block_inserted;
+ 
+
+   pp = pg + PGSIZE + OVERHEAD + BHSIZE;
+   while (GET_SIZE(HDRP(pp)) != 0)
     {
-      set_allocated(pp, new_size);
-      return pp;
+      if (!GET_ALLOC(HDRP(pp)) && (GET_SIZE(HDRP(pp)) >= new_size))
+      {
+        set_allocated(pp, new_size);
+        last_block_inserted = pp;
+        return pp;
+      }
+      pp = NEXT_BLKP(pp);
     }
-    pp = NEXT_BLKP(pp);
-  }
 
  pg = first_page;
  while(pg != NULL)
  {
-   pp = pg + PGSIZE + OVERHEAD + BHSIZE;
-   while (GET_SIZE(HDRP(pp)) != 0)
-   {
-    if (!GET_ALLOC(HDRP(pp)) && (GET_SIZE(HDRP(pp)) >= new_size))
+    if(pg != last_page_inserted)
     {
-      set_allocated(pp, new_size);
-      last_page_inserted = pg;
-      return pp;
-    }
-    pp = NEXT_BLKP(pp);
-  }
-  pg = NEXT_PAGE(pg);
-}
+     pp = pg + PGSIZE + OVERHEAD + BHSIZE;
+     while (GET_SIZE(HDRP(pp)) != 0)
+     {
+      if (!GET_ALLOC(HDRP(pp)) && (GET_SIZE(HDRP(pp)) >= new_size))
+      {
+        set_allocated(pp, new_size);
+        last_page_inserted = pg;
+        last_block_inserted = pp;
+        return pp;
+      }
+      pp = NEXT_BLKP(pp);
+     }
+    } 
+    pg = NEXT_PAGE(pg);
+  }   
  
  pp = extend(new_size);
  set_allocated(pp, new_size);
@@ -333,6 +345,8 @@ void attempt_unmap(void *ptr)
       NEXT_PAGE(PREV_PAGE(pg)) = NULL;
     }
 
+    last_page_inserted = NULL;
+    last_block_inserted = NULL;
     mem_unmap(page_start,unmap_size);
   }
 }
@@ -344,7 +358,7 @@ void mm_free(void *ptr)
 {
   GET_ALLOC(HDRP(ptr)) = 0;
   coalesce(ptr);
-  //attempt_unmap(ptr);
+  attempt_unmap(ptr);
 }
 
 int ptr_is_mapped(void *p, size_t len) 
