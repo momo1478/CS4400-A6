@@ -226,17 +226,17 @@ void *mm_malloc(size_t size)
  void *pg = first_page;
  void *pp;
 
- // pg = last_page_inserted;
- // pp = pg + PGSIZE + OVERHEAD + BHSIZE;
- // while (GET_SIZE(HDRP(pp)) != 0)
- //  {
- //    if (!GET_ALLOC(HDRP(pp)) && (GET_SIZE(HDRP(pp)) >= new_size))
- //    {
- //      set_allocated(pp, new_size);
- //      return pp;
- //    }
- //    pp = NEXT_BLKP(pp);
- //  }
+ pg = last_page_inserted == NULL ? first_page : last_page_inserted;
+ pp = pg + PGSIZE + OVERHEAD + BHSIZE;
+ while (GET_SIZE(HDRP(pp)) != 0)
+  {
+    if (!GET_ALLOC(HDRP(pp)) && (GET_SIZE(HDRP(pp)) >= new_size))
+    {
+      set_allocated(pp, new_size);
+      return pp;
+    }
+    pp = NEXT_BLKP(pp);
+  }
 
  pg = first_page;
  while(pg != NULL)
@@ -321,7 +321,7 @@ void attempt_unmap(void *ptr)
         return;
 
       PREV_PAGE(NEXT_PAGE(first_page)) = NULL;
-      first_page = NEXT_PAGE(first_page);
+      first_page = last_page_inserted =  NEXT_PAGE(first_page);
     }
     else if(NEXT_PAGE(pg) != NULL && PREV_PAGE(pg) != NULL)
     {
@@ -344,7 +344,7 @@ void mm_free(void *ptr)
 {
   GET_ALLOC(HDRP(ptr)) = 0;
   coalesce(ptr);
-  attempt_unmap(ptr);
+  //attempt_unmap(ptr);
 }
 
 int ptr_is_mapped(void *p, size_t len) 
