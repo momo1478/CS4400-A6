@@ -78,6 +78,7 @@ page* first_page; //First chunk pointer
 void* first_pp;   //First payload pointer.
 page* last_page_inserted;
 void* last_block_inserted;
+int extend_count;
 
 
 void examinePages()
@@ -88,6 +89,23 @@ void examinePages()
     printf("[prev:%p| %p |next:%p]\n",PREV_PAGE(pg), pg, NEXT_PAGE(pg));
     pg = NEXT_PAGE(pg);
   }
+}
+
+void examinePage(void* page)
+{
+  void* pg = page;
+  void* pp;
+  while(pg != NULL)
+    {
+      pp = (void *)pg + PGSIZE + BHSIZE;
+      
+      while(GET_SIZE(HDRP(pp)) != 0)
+        {
+          printf("[%ld,%d]=[%ld]--> ", GET_SIZE(HDRP(pp))/sizeof(block_header), GET_ALLOC(HDRP(pp)), GET_SIZE(FTRP(pp))/sizeof(block_header));
+          pp = NEXT_BLKP(pp);
+        }
+      printf("[X]\n");
+    }
 }
 
 void examineMemory()
@@ -118,6 +136,8 @@ void examineMemory()
  */
 int mm_init(void)
 {
+  extend_count = 0;
+
   size_t firstPageSize = PAGE_ALIGN(mem_pagesize() * 8);
   first_page = mem_map(firstPageSize);
   last_page_inserted = first_page;
@@ -158,8 +178,11 @@ int mm_init(void)
 
 void* extend(size_t new_size) 
 {
- int clampedSize = new_size > (8 * mem_pagesize()) ? new_size : 8 * mem_pagesize();
- size_t chunk_size = PAGE_ALIGN(clampedSize * 4); //PAGE_ALIGN(clampedSize * 4);
+ int pgsz_mult = 16 * (extend_count/8) < 1 ? 1 : (extend_count/8);
+ extend_count += 1;
+
+ int clampedSize = new_size > (pgsz_mult * mem_pagesize()) ? new_size : pgsz_mult * mem_pagesize();
+ size_t chunk_size = PAGE_ALIGN(clampedSize * 8); //PAGE_ALIGN(clampedSize * 4);
  void *new_page = mem_map(chunk_size);
 
  //Find pageList end.
@@ -231,7 +254,7 @@ void *mm_malloc(size_t size)
  void *pp;
 
  pg = last_page_inserted == NULL ? first_page : last_page_inserted;
- pp = last_block_inserted == NULL ? first_page : last_block_inserted;
+ //pp = last_block_inserted == NULL ? pg + PGSIZE + OVERHEAD + BHSIZE: last_block_inserted;
  
 
    pp = pg + PGSIZE + OVERHEAD + BHSIZE;
@@ -240,7 +263,7 @@ void *mm_malloc(size_t size)
       if (!GET_ALLOC(HDRP(pp)) && (GET_SIZE(HDRP(pp)) >= new_size))
       {
         set_allocated(pp, new_size);
-        last_block_inserted = pp;
+        //last_block_inserted = pp;
         return pp;
       }
       pp = NEXT_BLKP(pp);
@@ -256,6 +279,7 @@ void *mm_malloc(size_t size)
      {
       if (!GET_ALLOC(HDRP(pp)) && (GET_SIZE(HDRP(pp)) >= new_size))
       {
+
         set_allocated(pp, new_size);
         last_page_inserted = pg;
         last_block_inserted = pp;
