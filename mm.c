@@ -39,6 +39,7 @@
 
 #define NEXT_PAGE(pg) (((page *)pg)->next)
 #define PREV_PAGE(pg) (((page *)pg)->prev)
+#define PAGE_SIZE(pg) (((page *)pg)->size)
 
 /* Get Header from payload pointer bp */ 
 #define HDRP(bp) ((char *)(bp) - sizeof(block_header))
@@ -57,6 +58,8 @@ typedef struct
 {
   void *next;
   void *prev;
+  size_t size;
+  size_t filler;
 } page;
 
 typedef struct
@@ -121,6 +124,7 @@ int mm_init(void)
   //First Page Setup
   NEXT_PAGE(first_page) = NULL;
   PREV_PAGE(first_page) = NULL;
+  PAGE_SIZE(first_page) = firstPageSize;
 
   //First payload pointer
   first_pp = (char *)first_page + PGSIZE + BHSIZE;
@@ -152,8 +156,8 @@ int mm_init(void)
 
 void* extend(size_t new_size) 
 {
-int clampedSize = new_size > (8 * mem_pagesize()) ? new_size : 8 * mem_pagesize();
- size_t chunk_size = PAGE_ALIGN(clampedSize + 1); //PAGE_ALIGN(clampedSize * 4);
+ int clampedSize = new_size > (8 * mem_pagesize()) ? new_size : 8 * mem_pagesize();
+ size_t chunk_size = PAGE_ALIGN(clampedSize * 4); //PAGE_ALIGN(clampedSize * 4);
  void *new_page = mem_map(chunk_size);
 
  //Find pageList end.
@@ -167,6 +171,7 @@ int clampedSize = new_size > (8 * mem_pagesize()) ? new_size : 8 * mem_pagesize(
  NEXT_PAGE(pg) = new_page;
  NEXT_PAGE(NEXT_PAGE(pg)) = NULL;
  PREV_PAGE(NEXT_PAGE(pg)) = pg;
+ PAGE_SIZE(NEXT_PAGE(pg)) = chunk_size;
 
  last_page_inserted = NEXT_PAGE(pg);
 
@@ -220,6 +225,20 @@ void *mm_malloc(size_t size)
  int new_size = ALIGN(size + OVERHEAD);
  void *pg = first_page;
  void *pp;
+
+ // pg = last_page_inserted;
+ // pp = pg + PGSIZE + OVERHEAD + BHSIZE;
+ // while (GET_SIZE(HDRP(pp)) != 0)
+ //  {
+ //    if (!GET_ALLOC(HDRP(pp)) && (GET_SIZE(HDRP(pp)) >= new_size))
+ //    {
+ //      set_allocated(pp, new_size);
+ //      return pp;
+ //    }
+ //    pp = NEXT_BLKP(pp);
+ //  }
+
+ pg = first_page;
  while(pg != NULL)
  {
    pp = pg + PGSIZE + OVERHEAD + BHSIZE;
@@ -228,6 +247,7 @@ void *mm_malloc(size_t size)
     if (!GET_ALLOC(HDRP(pp)) && (GET_SIZE(HDRP(pp)) >= new_size))
     {
       set_allocated(pp, new_size);
+      last_page_inserted = pg;
       return pp;
     }
     pp = NEXT_BLKP(pp);
@@ -281,7 +301,7 @@ void attempt_unmap(void *ptr)
 
   size_t unmap_size = PAGE_ALIGN(GET_SIZE(HDRP(ptr)) + OVERHEAD + BHSIZE + PGSIZE);
   void * page_start = ptr - OVERHEAD - BHSIZE - PGSIZE;
-  printf("unmap_size :%ld\n",unmap_size);
+  //printf("unmap_size :%ld\n",unmap_size);
   
   //Terminator block is next. Prologue block is prev.
   if(GET_SIZE(next) == 0 && GET_SIZE(prev) == OVERHEAD)
@@ -344,30 +364,39 @@ int mm_check()
 
   while(pg != NULL)
   {
-    //beginning of page doesn't have atleast 1 page on it.
-    if(!ptr_is_mapped(pg,mem_pagesize()))
-      return 0;
+    //Page is mapped.
+    if(!ptr_is_mapped(pg,PAGE_SIZE(pg))) { return 0; }
 
     pp = (void *)pg + PGSIZE + BHSIZE;
 
+    //check for prologue blocks
+    if(GET_SIZE(HDRP(pp)) == 2 && GET_ALLOC(HDRP(pp)) == 1) { return 0; }
+    if(GET_SIZE(FTRP(pp)) == 2) { return 0; }
+
     while(GET_SIZE(HDRP(pp)) != 0)
     {
-      // Size is invalid or leads to unmapped address.
-      if( !ptr_is_mapped(pp,GET_SIZE(HDRP(pp))) && GET_SIZE(HDRP(pp)) < (size_t)MAX_BLOCK_SIZE)
-        return 0;
 
+      // Bidirectional check.
+      if( !ptr_is_mapped(pp,  GET_SIZE(HDRP(pp))) ) { return 0; }
+      if( GET_SIZE(HDRP(pp)) < (size_t)MAX_BLOCK_SIZE) { return 0; }
+
+      if( !ptr_is_mapped(pp - GET_SIZE(HDRP(pp)) - BHSIZE ,GET_SIZE(FTRP(pp))) ) { return 0; }
+      if( GET_SIZE(FTRP(pp)) < (size_t)MAX_BLOCK_SIZE ) { return 0; }
+      
       //Allocation bit is not 0 or 1
-      if(GET_ALLOC(HDRP(pp)) != 0 || GET_ALLOC(HDRP(pp)) != 1)
-        return 0;
+      if( GET_ALLOC(HDRP(pp)) != 0 || GET_ALLOC(HDRP(pp)) != 1) { return 0; }
 
       //Header size is not the same as footer size.
-      if( GET_SIZE(HDRP(pp)) != GET_SIZE(FTRP(pp)) )
-        return 0;
+      if( GET_SIZE(HDRP(pp)) != GET_SIZE(FTRP(pp)) ) { return 0; }
 
       //Check to see if two blocks are not free next to each other.
 
       pp = NEXT_BLKP(pp);
     }
+
+    //Ensure the Terminator is indeed there.
+    if(GET_SIZE(HDRP(pp)) != 0) 
+
     pg = NEXT_PAGE(pg);
   }
   return 1;
@@ -379,13 +408,13 @@ int mm_check()
  */
 int mm_can_free(void *p)
 {
+  //if( !ptr_is_mapped(ADDRESS_PAGE_START(p)) )
+  
   //ensure pointer is mapped
-  if( !ptr_is_mapped(p,GET_SIZE(HDRP(p))) )
-    return 0;
+  if( !ptr_is_mapped(p, GET_SIZE(HDRP(p))) ) { return 0; }
 
   // ensure that block was allocated.
-  if( GET_ALLOC(HDRP(p)) != 1 )
-    return 0;
+  if( GET_ALLOC(HDRP(p)) != 1 ) { return 0; }
 
 
   return 1;
