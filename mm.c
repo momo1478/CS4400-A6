@@ -76,6 +76,16 @@ void* first_pp;   //First payload pointer.
 page* last_page_inserted;
 
 
+void examinePages()
+{
+  void* pg = first_page;
+  while(pg != NULL)
+  {
+    printf("[prev:%p| %p |next:%p]\n",PREV_PAGE(pg), pg, NEXT_PAGE(pg));
+    pg = NEXT_PAGE(pg);
+  }
+}
+
 void examineMemory()
 {
   void* pp = first_pp;
@@ -104,7 +114,7 @@ void examineMemory()
  */
 int mm_init(void)
 {
-  size_t firstPageSize = PAGE_ALIGN(mem_pagesize());
+  size_t firstPageSize = PAGE_ALIGN(mem_pagesize() * 8);
   first_page = mem_map(firstPageSize);
   last_page_inserted = first_page;
   
@@ -147,7 +157,7 @@ int clampedSize = new_size > (8 * mem_pagesize()) ? new_size : 8 * mem_pagesize(
  void *new_page = mem_map(chunk_size);
 
  //Find pageList end.
- void *pg = last_page_inserted;
+ void *pg = first_page;
  while(NEXT_PAGE(pg) != NULL)
  {
   pg = NEXT_PAGE(pg);
@@ -264,6 +274,49 @@ void *coalesce(void *bp)
  return bp;
 }
 
+void attempt_unmap(void *ptr)
+{
+  void *prev = HDRP(PREV_BLKP(ptr));
+  void *next = HDRP(NEXT_BLKP(ptr));
+
+  size_t unmap_size = PAGE_ALIGN(GET_SIZE(HDRP(ptr)) + OVERHEAD + BHSIZE + PGSIZE);
+  void * page_start = ptr - OVERHEAD - BHSIZE - PGSIZE;
+  printf("unmap_size :%ld\n",unmap_size);
+  
+  //Terminator block is next. Prologue block is prev.
+  if(GET_SIZE(next) == 0 && GET_SIZE(prev) == OVERHEAD)
+  {
+    //Un hook page from page linked list.
+    void *pg = first_page;
+    while(pg != page_start)
+    {
+      pg = NEXT_PAGE(pg);
+    }
+
+    //page to remove is page linked list head
+    if(pg == first_page)
+    {
+      //About to remove first page.
+      if(NEXT_PAGE(first_page) == NULL && PREV_PAGE(first_page) == NULL)
+        return;
+
+      PREV_PAGE(NEXT_PAGE(first_page)) = NULL;
+      first_page = NEXT_PAGE(first_page);
+    }
+    else if(NEXT_PAGE(pg) != NULL && PREV_PAGE(pg) != NULL)
+    {
+      PREV_PAGE(NEXT_PAGE(pg)) = PREV_PAGE(pg);
+      NEXT_PAGE(PREV_PAGE(pg)) = NEXT_PAGE(pg);
+    }
+    else
+    {
+      NEXT_PAGE(PREV_PAGE(pg)) = NULL;
+    }
+
+    mem_unmap(page_start,unmap_size);
+  }
+}
+
 /*
  * mm_free - Freeing a block does nothing.
  */
@@ -271,6 +324,7 @@ void mm_free(void *ptr)
 {
   GET_ALLOC(HDRP(ptr)) = 0;
   coalesce(ptr);
+  attempt_unmap(ptr);
 }
 
 int ptr_is_mapped(void *p, size_t len) 
@@ -309,6 +363,8 @@ int mm_check()
       //Header size is not the same as footer size.
       if( GET_SIZE(HDRP(pp)) != GET_SIZE(FTRP(pp)) )
         return 0;
+
+      //Check to see if two blocks are not free next to each other.
 
       pp = NEXT_BLKP(pp);
     }
