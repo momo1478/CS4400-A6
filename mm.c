@@ -71,7 +71,7 @@ typedef struct
 typedef struct
 {
   size_t size;    //In Bytes
-  int filler;
+  char allocated;
 } block_footer;
 
 page* first_page; //First chunk pointer
@@ -156,12 +156,14 @@ int mm_init(void)
   GET_SIZE(HDRP(pp)) = OVERHEAD;
   GET_ALLOC(HDRP(pp)) = 1;
   GET_SIZE(FTRP(pp)) = OVERHEAD;
+  GET_ALLOC(FTRP(pp)) = 1;
 
   pp = NEXT_BLKP(pp);
   //setup unallocated block for new chunk.
   GET_SIZE(HDRP(pp)) = firstPageSize - PGSIZE -  OVERHEAD - BHSIZE;
   GET_ALLOC(HDRP(pp)) = 0;
   GET_SIZE(FTRP(pp)) = firstPageSize - PGSIZE -  OVERHEAD - BHSIZE;
+  GET_ALLOC(FTRP(pp)) = 0;
 
   pp = NEXT_BLKP(pp);
   //setup terminator block for new chunk
@@ -209,12 +211,14 @@ void* extend(size_t new_size)
  GET_SIZE(HDRP(pp)) = OVERHEAD;
  GET_ALLOC(HDRP(pp)) = 1;
  GET_SIZE(FTRP(pp)) = OVERHEAD;
+ GET_ALLOC(FTRP(pp)) = 1;
 
  pp = NEXT_BLKP(pp); 
  //create unalocated block
  GET_SIZE(HDRP(pp)) = chunk_size - PGSIZE - OVERHEAD - BHSIZE;
  GET_SIZE(FTRP(pp)) = chunk_size - PGSIZE - OVERHEAD - BHSIZE;
  GET_ALLOC(HDRP(pp)) = 0;
+ GET_ALLOC(FTRP(pp)) = 0;
 
  pp = NEXT_BLKP(pp);
  //create terminator block
@@ -237,8 +241,10 @@ void set_allocated(void *bp, size_t size)
    GET_SIZE(FTRP(NEXT_BLKP(bp))) = extra_size;
 
    GET_ALLOC(HDRP(NEXT_BLKP(bp))) = 0;
+   GET_ALLOC(FTRP(NEXT_BLKP(bp))) = 0;
  }
  GET_ALLOC(HDRP(bp)) = 1;
+ GET_ALLOC(FTRP(bp)) = 1;
 }
 
 /* 
@@ -382,6 +388,7 @@ void attempt_unmap(void *ptr)
 void mm_free(void *ptr)
 {
   GET_ALLOC(HDRP(ptr)) = 0;
+  GET_ALLOC(FTRP(ptr)) = 0;
   coalesce(ptr);
   attempt_unmap(ptr);
 }
@@ -436,6 +443,10 @@ int mm_check()
 	  //Allocation bit is not 0 or 1
 	  if( GET_ALLOC(HDRP(pp)) != 0 && GET_ALLOC(HDRP(pp)) != 1) { if(d)printf("12\n");return 0; }
 
+	  //Check double check method for alloc to ensure that not both alloc bits were mangled.
+	  if(GET_ALLOC(HDRP(pp)) == 1 && GET_ALLOC(FTRP(pp)) == 0) { return 0; }
+	  if(GET_ALLOC(HDRP(pp)) == 0 && GET_ALLOC(FTRP(pp)) == 1) { return 0; }
+
 	  //Header size is not the same as footer size.
 	  if( GET_SIZE(HDRP(pp)) != GET_SIZE(FTRP(pp)) ) { if(d)printf("13\n");return 0; }
 
@@ -447,7 +458,6 @@ int mm_check()
 	pg = NEXT_PAGE(pg);
     }
 
-  //printf("Oh boy\n");
   return 1;
 }
 
@@ -481,6 +491,10 @@ int mm_can_free(void *p)
 
   // ensure that block was allocated.
   if( GET_ALLOC(HDRP(p)) != 1 ) { return 0; }
+
+  //Double Aloc bit check
+  if(GET_ALLOC(HDRP(p)) == 1 && GET_ALLOC(FTRP(p)) == 0) { return 0; }
+  if(GET_ALLOC(HDRP(p)) == 0 && GET_ALLOC(FTRP(p)) == 1) { return 0; }
 
 
   return 1;
