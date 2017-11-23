@@ -178,8 +178,9 @@ int mm_init(void)
 
 void* extend(size_t new_size) 
 {
- int pgsz_mult = 16 * (extend_count/8) < 1 ? 1 : (extend_count/8);
+ int pgsz_mult = (extend_count/8) < 1 ? 1 : (extend_count/8);
  extend_count += 1;
+ //printf("ec:%d\n",extend_count);
 
  int clampedSize = new_size > (pgsz_mult * mem_pagesize()) ? new_size : pgsz_mult * mem_pagesize();
  size_t chunk_size = PAGE_ALIGN(clampedSize * 8); //PAGE_ALIGN(clampedSize * 4);
@@ -399,44 +400,52 @@ int mm_check()
 {
   void* pg = first_page;
   void* pp;
-
   while(pg != NULL)
-  {
-    //Page is mapped.
-    if(!ptr_is_mapped(pg,PAGE_SIZE(pg))) { return 0; }
-
-    pp = (void *)pg + PGSIZE + BHSIZE;
-
-    //check for prologue blocks
-    if(GET_SIZE(HDRP(pp)) == 2 && GET_ALLOC(HDRP(pp)) == 1) { return 0; }
-    if(GET_SIZE(FTRP(pp)) == 2) { return 0; }
-
-    while(GET_SIZE(HDRP(pp)) != 0)
     {
+      //Page is mapped.
+      if(!ptr_is_mapped(pg,PAGE_SIZE(pg))) { printf("1\n");return 0; }
 
-      // Bidirectional check.
-      if( !ptr_is_mapped(pp,  GET_SIZE(HDRP(pp))) ) { return 0; }
-      if( GET_SIZE(HDRP(pp)) < (size_t)MAX_BLOCK_SIZE) { return 0; }
+      pp = (void *)pg + PGSIZE + BHSIZE;
 
-      if( !ptr_is_mapped(pp - GET_SIZE(HDRP(pp)) - BHSIZE ,GET_SIZE(FTRP(pp))) ) { return 0; }
-      if( GET_SIZE(FTRP(pp)) < (size_t)MAX_BLOCK_SIZE ) { return 0; }
-      
-      //Allocation bit is not 0 or 1
-      if( GET_ALLOC(HDRP(pp)) != 0 || GET_ALLOC(HDRP(pp)) != 1) { return 0; }
+      //check for prologue blocks
+      if(GET_SIZE(HDRP(pp)) != OVERHEAD || GET_ALLOC(HDRP(pp)) != 1) { printf("2\n");return 0; }
+      if(GET_SIZE(FTRP(pp)) != OVERHEAD) { printf("15\n");return 0; }
 
-      //Header size is not the same as footer size.
-      if( GET_SIZE(HDRP(pp)) != GET_SIZE(FTRP(pp)) ) { return 0; }
-
-      //Check to see if two blocks are not free next to each other.
-
+      //Skip past prologue to check rest of the block.
       pp = NEXT_BLKP(pp);
+      while(GET_SIZE(HDRP(pp)) != 0)
+	{
+	  //Header is mapped
+	  if(!ptr_is_mapped(pp - BHSIZE, BHSIZE)) { printf("3\n");return 0;}
+	  
+	  //Payload not 16 byte aligned
+	  if( ((size_t)pp & 15) != 0 ) { printf("4\n");return 0; }
+	  
+	  // Bidirectional check.
+	  if( !ptr_is_mapped(HDRP(pp),  GET_SIZE(HDRP(pp))) ) { printf("5\n");return 0; }
+	  if( GET_SIZE(HDRP(pp)) > (size_t)MAX_BLOCK_SIZE) { printf("6\n");return 0;}
+	  if( GET_SIZE(HDRP(pp)) < 3 * BHSIZE) { printf("7\n");return 0; }
+
+	  if( ((size_t)FTRP(pp) & 15) != 0 ) { printf("8\n");return 0; }
+	  if( !ptr_is_mapped(HDRP(pp) ,GET_SIZE(FTRP(pp))) ) { printf("9\n");return 0; }
+	  if( GET_SIZE(FTRP(pp)) > (size_t)MAX_BLOCK_SIZE ) { printf("10\n");return 0; }
+	  if( GET_SIZE(FTRP(pp)) < 3 * BHSIZE) { printf("11\n");return 0; }
+      
+	  //Allocation bit is not 0 or 1
+	  if( GET_ALLOC(HDRP(pp)) != 0 && GET_ALLOC(HDRP(pp)) != 1) { printf("12\n");return 0; }
+
+	  //Header size is not the same as footer size.
+	  if( GET_SIZE(HDRP(pp)) != GET_SIZE(FTRP(pp)) ) { printf("13\n");return 0; }
+
+	  //No two consectuive blocks are free
+	  if( GET_ALLOC(HDRP(PREV_BLKP(pp))) == 0 && GET_ALLOC(HDRP(pp)) == 0 ) { printf("14\n");return 0; }
+	  
+	  pp = NEXT_BLKP(pp);
+	}
+	pg = NEXT_PAGE(pg);
     }
 
-    //Ensure the Terminator is indeed there.
-    if(GET_SIZE(HDRP(pp)) != 0) 
-
-    pg = NEXT_PAGE(pg);
-  }
+  //printf("Oh boy\n");
   return 1;
 }
 
@@ -446,10 +455,27 @@ int mm_check()
  */
 int mm_can_free(void *p)
 {
-  //if( !ptr_is_mapped(ADDRESS_PAGE_START(p)) )
-  
-  //ensure pointer is mapped
-  if( !ptr_is_mapped(p, GET_SIZE(HDRP(p))) ) { return 0; }
+  //p is 16 byte aligned
+  if( ((size_t)p & 15) != 0 ) { return 0; }
+
+  //Header is not mapped
+  if(!ptr_is_mapped(HDRP(p), BHSIZE)) { return 0;}
+
+  //is not prologue or epilogue
+  if(GET_SIZE(HDRP(p)) == OVERHEAD && GET_ALLOC(HDRP(p)) == 1) { return 0; }
+  if(GET_SIZE(FTRP(p)) == OVERHEAD && GET_ALLOC(HDRP(p)) == 1) { return 0; }
+
+  //is not a terminator
+  if(GET_SIZE(HDRP(p)) == 0 && GET_ALLOC(HDRP(p)) == 1) { return 0; }
+
+  // Bidirectional check.
+  if( !ptr_is_mapped(HDRP(p), GET_SIZE(HDRP(p))) ) { return 0; }
+  if( GET_SIZE(HDRP(p)) > (size_t)MAX_BLOCK_SIZE) { return 0; }
+  if( GET_SIZE(HDRP(p)) < 3 * BHSIZE) { return 0; }
+
+  if( !ptr_is_mapped(HDRP(p), GET_SIZE(FTRP(p))) ) { return 0; }
+  if( GET_SIZE(FTRP(p)) > (size_t)MAX_BLOCK_SIZE ) { return 0; }
+  if( GET_SIZE(FTRP(p)) < 3 * BHSIZE) { return 0; }
 
   // ensure that block was allocated.
   if( GET_ALLOC(HDRP(p)) != 1 ) { return 0; }
