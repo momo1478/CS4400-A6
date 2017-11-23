@@ -1,15 +1,14 @@
 /*
  * mm-naive.c - The least memory-efficient malloc package.
  * 
- * In this naive approach, a block is allocated by allocating a
- * new page as needed.  A block is pure payload. There are no headers or
- * footers.  Blocks are never coalesced or reused.
- *
- * The heap check and free check always succeeds, because the
- * allocator doesn't depend on any of the old data.
- *
- * NOTE TO STUDENTS: Replace this header comment with your own header
- * comment that gives a high level description of your solution.
+ * The following implemented allocator can be classified as an implicit coalescing
+ * allocator with a few key details. "Chunks" or contiguous pages are mapped in a linked list
+ * that can be found at the first 32 bytes of each chunk, the doubly linked list includes a next
+ * and previous reference, along with that chunks size and a filler variable to keep payloads 16 byte aligned
+ * Block headers and footers both have allocation bits, this is for mm_check to ensure that headers haven't been
+ * mangled harshly. There includes an extending policy that adds 8 pages to the minimum request every 8 times
+ * extend is called. There also includes an optimization in mm_malloc that searches the last page that a block was
+ * allocated in.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -78,6 +77,7 @@ page* first_page; //First chunk pointer
 void* first_pp;   //First payload pointer.
 page* last_page_inserted;
 void* last_block_inserted;
+void* free_next_block;
 int extend_count;
 
 
@@ -180,7 +180,7 @@ int mm_init(void)
 
 void* extend(size_t new_size) 
 {
- int pgsz_mult = (extend_count/8) < 1 ? 1 : (extend_count/8);
+ int pgsz_mult = 8 * (extend_count/8) < 1 ? 1 : (extend_count/8);
  extend_count += 1;
  //printf("ec:%d\n",extend_count);
 
@@ -259,37 +259,33 @@ void *mm_malloc(size_t size)
  int new_size = ALIGN(size + OVERHEAD);
  void *pg = first_page;
  void *pp;
-
- pg = last_page_inserted == NULL ? first_page : last_page_inserted;
- //pp = last_block_inserted == NULL ? pg + PGSIZE + OVERHEAD + BHSIZE: last_block_inserted;
  
+ pg = last_page_inserted == NULL ? first_page : last_page_inserted;
+ pp = pg + PGSIZE + OVERHEAD + BHSIZE;
 
-   pp = pg + PGSIZE + OVERHEAD + BHSIZE;
-   while (GET_SIZE(HDRP(pp)) != 0)
-    {
-      if (!GET_ALLOC(HDRP(pp)) && (GET_SIZE(HDRP(pp)) >= new_size))
-      {
-        set_allocated(pp, new_size);
-        //last_block_inserted = pp;
-        return pp;
-      }
-      pp = NEXT_BLKP(pp);
-    }
+
+ while (GET_SIZE(HDRP(pp)) != 0)
+   {
+     if (!GET_ALLOC(HDRP(pp)) && (GET_SIZE(HDRP(pp)) >= new_size))
+       {
+	 set_allocated(pp, new_size);
+	 return pp;
+       }
+     pp = NEXT_BLKP(pp);
+   }
 
  pg = first_page;
  while(pg != NULL)
  {
-    if(pg != last_page_inserted)
+   //if(pg != last_page_inserted)
     {
      pp = pg + PGSIZE + OVERHEAD + BHSIZE;
      while (GET_SIZE(HDRP(pp)) != 0)
      {
       if (!GET_ALLOC(HDRP(pp)) && (GET_SIZE(HDRP(pp)) >= new_size))
       {
-
         set_allocated(pp, new_size);
         last_page_inserted = pg;
-        last_block_inserted = pp;
         return pp;
       }
       pp = NEXT_BLKP(pp);
@@ -378,6 +374,7 @@ void attempt_unmap(void *ptr)
 
     last_page_inserted = NULL;
     last_block_inserted = NULL;
+    
     mem_unmap(page_start,unmap_size);
   }
 }
